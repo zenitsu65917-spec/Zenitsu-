@@ -1,0 +1,65 @@
+// plugins/webzip.js – KIRA X MD (Download website as ZIP)
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+
+module.exports = {
+    name: 'webzip',
+    alias: ['sitezip', 'downloadsite'],
+    category: 'downloader',
+    description: 'Download a website as a ZIP archive',
+    usage: `${process.env.PREFIX || '.'}webzip <URL>`,
+
+    async execute(sock, msg, args) {
+        const jid = msg.key.remoteJid;
+        let url = (args && Array.isArray(args) ? args.join(' ') : '').trim();
+
+        if (!url) {
+            // Check reply
+            const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (quoted) {
+                const text = quoted.conversation || quoted.extendedTextMessage?.text || '';
+                const match = text.match(/https?:\/\/[^\s]+/);
+                if (match) url = match[0];
+            }
+        }
+
+        if (!url || !url.startsWith('http')) {
+            await sock.sendMessage(jid, { text: `❌ *Provide a website URL*\n➤ Example: ${process.env.PREFIX || '.'}webzip https://example.com` }, { quoted: msg });
+            return;
+        }
+
+        await sock.sendMessage(jid, { react: { text: '📥', key: msg.key } });
+        const statusMsg = await sock.sendMessage(jid, { text: `🔍 *Downloading website...*` });
+
+        let tempFile = null;
+        try {
+            const apiUrl = `https://jerrycoder.oggyapi.workers.dev/tool/web2zip?url=${encodeURIComponent(url)}`;
+            const response = await axios.get(apiUrl, { responseType: 'arraybuffer', timeout: 60000 });
+            const zipBuffer = Buffer.from(response.data);
+
+            const tempDir = path.join(__dirname, '../temp');
+            if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+            tempFile = path.join(tempDir, `site_${Date.now()}.zip`);
+            fs.writeFileSync(tempFile, zipBuffer);
+
+            // Send as document
+            const fileName = `website_${new URL(url).hostname}.zip`;
+            await sock.sendMessage(jid, {
+                document: fs.readFileSync(tempFile),
+                mimetype: 'application/zip',
+                fileName: fileName,
+                caption: `📦 *Website downloaded*\n🌐 ${url}\n\n> *KIRA X MD*`
+            });
+
+            await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } });
+            await sock.sendMessage(jid, { text: '✅ *ZIP sent*', edit: statusMsg.key });
+        } catch (err) {
+            console.error('Webzip error:', err);
+            await sock.sendMessage(jid, { text: '❌ *Failed to download website*', edit: statusMsg.key });
+            await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+        } finally {
+            if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+        }
+    }
+};
